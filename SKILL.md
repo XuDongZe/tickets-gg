@@ -2,62 +2,99 @@
 
 故宫门票余票查询助手 - 查询故宫博物院指定日期的门票余票情况。
 
-## SKILL 可用命令
+## 标准操作流程（SOP）
 
-SKILL 只使用以下命令，不要使用 `watch`（那是给用户交互式使用的）。
+收到用户查票请求后，**严格按以下步骤执行**：
+
+### Step 1: 确保 Token 可用
+
+```bash
+.venv/bin/python main.py refresh-token
+```
+
+该命令内置智能判断，**每次查询前都应执行**：
+- Token 仍有效（剩余 >10 分钟）→ 秒返回，无需人工介入
+- Token 过期或即将过期 → 启动代理捕获，提示用户在 Mac 微信中打开「故宫博物院」小程序（阻塞最多 120 秒）
+- 捕获超时 → 命令会 fallback 到交互式输入要求粘贴 Token，**直接输入空行跳过**。然后告诉用户「刚才没抓到 Token，请重新打开微信小程序，我再试一次」，再次执行 `refresh-token`。**用户没有能力手动获取 Token，不要让用户粘贴。**
+
+**SKILL 不需要自行判断 Token 是否有效，交给 `refresh-token` 处理。**
+
+### Step 2: 读取 Token
+
+从 `config.yaml` 读取 `auth.access_token` 字段（`refresh-token` 成功后会自动保存）。
+
+### Step 3: 执行查询
+
+```bash
+.venv/bin/python main.py check --token TOKEN --dates YYYY-MM-DD [YYYY-MM-DD ...]
+```
+
+### Step 4: 解读结果并回复用户
+
+`check` 命令的输出已封装好所有判断逻辑（放票范围、售罄、有票），直接按输出内容组织回复即可。
+
+## 常见场景
+
+### 场景 A：查询指定日期
+
+用户说「查 5 月 1 日的票」→ 直接 `--dates 2026-05-01`。
+
+### 场景 B：查询最近 N 天
+
+用户说「看看最近 3 天」→ 计算今天起 3 天的日期，传入 `--dates`。
+
+### 场景 C：查最近哪天有票
+
+用户说「最近哪天有票」→ 分步查询：
+1. 先查今天起 3~4 天
+2. 如果全部售罄，扩展查询到可购范围上限（`check` 输出的日志会显示最远可购日期）
+3. 找到第一个有票的日期，汇报给用户
+
+### 场景 D：指定时段偏好
+
+用户说「上午场」→ 加 `--time-slot morning`；「下午场」→ `--time-slot afternoon`。
+
+## 可用命令
 
 | 命令 | 说明 |
 |------|------|
 | `check` | 一次性查询余票（需要 `--token` 和 `--dates`） |
-| `refresh-token` | 获取新 Token 并保存到 config.yaml |
+| `refresh-token` | 获取/刷新 Token 并保存到 config.yaml |
 | `status` | 查看 Token 状态和查询配置（需要 `--token` 和 `--dates`） |
 
-如需持续监控，SKILL 应自行循环调用 `check`，而不是调用 `watch`。
+**不要使用 `watch`**（那是给用户交互式使用的）。如需持续监控，SKILL 应自行循环调用 `check`。
 
-## Token 生命周期
+### 参数说明
 
-SKILL 负责维护 Token：
-1. 调用 `refresh-token` 获取 Token（自动保存到 config.yaml）
-2. 从 config.yaml 读取 Token，传入 `check --token TOKEN ...`
-3. Token 有效期约 2 小时，过期后重新执行 `refresh-token`
-
-**重要：`refresh-token` 需要人类介入。** 该命令会启动本地代理并等待用户在 Mac 微信中打开故宫小程序，整个过程会阻塞最多 120 秒。SKILL 调用时应提示用户操作，并耐心等待命令返回。如果超时未捕获到 Token，会回退到要求手动粘贴 Token 的交互式输入。
-
-## 使用示例
-
-```bash
-# 获取 Token
-.venv/bin/python main.py refresh-token
-
-# 查询余票
-.venv/bin/python main.py check --token TOKEN --dates 2026-05-01
-.venv/bin/python main.py check --token TOKEN --dates 2026-05-01 2026-05-02
-.venv/bin/python main.py check --token TOKEN --dates 2026-05-01 --time-slot morning
-
-# 查看状态
-.venv/bin/python main.py status --token TOKEN --dates 2026-05-01
-```
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `--token` | 是 | access_token，从 config.yaml 读取 |
+| `--dates` | 是 | 目标日期，格式 YYYY-MM-DD，可指定多个 |
+| `--time-slot` | 否 | 时段偏好：`any`（默认）/ `morning` / `afternoon` |
 
 ## 安装
 
+首次使用前需安装依赖（在项目根目录执行）：
+
 ```bash
-cd /Users/happyelements/Projects/tmp1/gugong-ticket-helper
 ./install.sh
 ```
 
 ## 注意事项
 
-- Token 有效期约 2 小时，过期需通过 `refresh-token` 重新获取
+- Token 有效期约 2 小时
 - API 请求有限流保护，间隔至少 1 秒
 - 仅支持 macOS
 - 所有用户可见输出使用中文
-- `--time-slot` 可选，默认 `any`（输出会分别显示上午/下午余票）
+- 故宫门票提前约 6-7 天放票，具体天数动态变化，不要硬编码
+- 每周一闭馆（法定节假日除外）
 
-## 故宫 API 关键知识
+## 故宫 API 内部知识（仅修改代码时参考）
 
-### 放票规则
+> 以下内容面向需要修改 `check` 命令内部逻辑的开发者。SKILL 调用 CLI 时无需了解这些细节，`check` 已封装好所有判断。
 
-故宫门票提前若干天放票（当前约 6-7 天），具体天数由 `canBuyDays` API 动态返回，不要硬编码。
+<details>
+<summary>展开 API 细节</summary>
 
 ### API 端点与数据可信度
 
@@ -71,16 +108,12 @@ cd /Users/happyelements/Projects/tmp1/gugong-ticket-helper
 
 ### calendar API 数据陷阱
 
-`get_calendar()` 返回的每日数据中：
-
 | 字段 | 含义 | 陷阱 |
 |------|------|------|
 | `stockNum` | **布尔标记**（0 或 1），不是真实库存 | 未放票日期返回 `1`，已售罄返回 `0`，有大量余票也返回 `1` |
 | `remainingDesc` | 真实库存描述，如 `"余5956张"` | 仅在库存较多时出现；库存少或未放票时为 `None` |
-| `saleStatus` | `"T"` 表示可售（含未放票），`"F"` 表示闭馆 | 未放票日期也返回 `"T"`，不能单独用来判断是否已放票 |
-| `disPlayStatus` | `2`=可预约/占位，`3`=已售罄 | 未放票日期也返回 `2`，与真正有票的日期相同 |
-
-**关键结论**：当 `stockNum=1` 但 `remainingDesc` 缺失时，无法仅凭 calendar 数据区分「真有少量票」和「未放票占位」。
+| `saleStatus` | `"T"` 表示可售（含未放票），`"F"` 表示闭馆 | 未放票日期也返回 `"T"` |
+| `disPlayStatus` | `2`=可预约/占位，`3`=已售罄 | 未放票日期也返回 `2` |
 
 ### time reserve API 数据陷阱
 
@@ -109,3 +142,5 @@ cd /Users/happyelements/Projects/tmp1/gugong-ticket-helper
 | 未放票 | `1` | `None` | 占位值（如 `5`） |
 
 注意「有票（余票少）」和「未放票」的 calendar 返回值完全相同，必须用 `canBuyDays` 区分。
+
+</details>
